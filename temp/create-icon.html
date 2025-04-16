@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Create Simple Icon</title>
+</head>
+<body>
+  <canvas id="iconCanvas" width="1024" height="1024"></canvas>
+  <div style="margin-top: 20px;">
+    <p>Instructions:</p>
+    <ol>
+      <li>This page has created a simple blue square icon with "F" in the center</li>
+      <li>Right-click on the square above and select "Save Image As..."</li>
+      <li>Save it as "icon.png" in your project's "assets/images" folder</li>
+    </ol>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('iconCanvas');
+    const ctx = canvas.getContext('2d');
+    
+    // Draw background
+    ctx.fillStyle = '#4285F4'; // Google Blue
+    ctx.fillRect(0, 0, 1024, 1024);
+    
+    // Draw text
+    ctx.fillStyle = 'white';
+    ctx.font = 'bold 600px Arial, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('F', 512, 512);
+  </script>
+</body>
+</html> 

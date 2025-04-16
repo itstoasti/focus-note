@@ -1,0 +1,107 @@
+import { useEffect, useState } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { Stats } from '../../components/Stats';
+import { Storage } from '../../types/storage';
+import { getStorageData, getLevelTitle } from '../../utils/storage';
+import { useTheme } from '../../context/ThemeContext';
+
+export default function StatsScreen() {
+  const [storage, setStorage] = useState<Storage | null>(null);
+  const { isDark } = useTheme();
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  async function loadData() {
+    const data = await getStorageData();
+    setStorage(data);
+  }
+
+  if (!storage) {
+    return null;
+  }
+
+  const { stats } = storage;
+  const levelTitle = getLevelTitle(stats.level);
+
+  return (
+    <SafeAreaView 
+      style={[styles.container, { backgroundColor: isDark ? '#000000' : '#F8FAFC' }]}
+      edges={['top', 'left', 'right']}
+    >
+      <Text style={[styles.title, { color: isDark ? '#FFFFFF' : '#000000' }]}>Your Progress</Text>
+      <Stats stats={stats} />
+      <View style={[styles.card, { 
+        backgroundColor: isDark ? '#1A1A1A' : '#FFFFFF',
+        borderColor: isDark ? '#2A2A2A' : '#E2E8F0'
+      }]}>
+        <Text style={[styles.cardTitle, { color: isDark ? '#FFFFFF' : '#1E293B' }]}>Current Level</Text>
+        <Text style={styles.levelTitle}>
+          Level {stats.level}: {levelTitle}
+        </Text>
+        <Text style={[styles.description, { color: isDark ? '#94A3B8' : '#64748B' }]}>
+          Keep completing your daily tasks to earn XP and level up!
+        </Text>
+      </View>
+      <View style={[styles.card, { 
+        backgroundColor: isDark ? '#1A1A1A' : '#FFFFFF',
+        borderColor: isDark ? '#2A2A2A' : '#E2E8F0'
+      }]}>
+        <Text style={[styles.cardTitle, { color: isDark ? '#FFFFFF' : '#1E293B' }]}>Streak</Text>
+        <Text style={styles.streakCount}>
+          {stats.streak} {stats.streak >= 3 ? '🔥' : ''}
+        </Text>
+        <Text style={[styles.description, { color: isDark ? '#94A3B8' : '#64748B' }]}>
+          {stats.streak === 0
+            ? "Start your streak by completing today's tasks!"
+            : `You've been productive for ${stats.streak} day${
+                stats.streak === 1 ? '' : 's'
+              } in a row!`}
+        </Text>
+      </View>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    padding: 16,
+    paddingBottom: 100,
+  },
+  title: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    marginBottom: 24,
+    textAlign: 'center',
+  },
+  card: {
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 16,
+    borderWidth: 1,
+  },
+  cardTitle: {
+    fontSize: 18,
+    fontWeight: '600',
+    marginBottom: 8,
+  },
+  levelTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#FF6B00',
+    marginBottom: 8,
+  },
+  streakCount: {
+    fontSize: 48,
+    fontWeight: 'bold',
+    color: '#FF6B00',
+    marginBottom: 8,
+  },
+  description: {
+    fontSize: 16,
+    lineHeight: 24,
+  },
+});

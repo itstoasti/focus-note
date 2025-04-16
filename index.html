@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Expo Connection Tester</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 500px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .container {
+      padding: 20px;
+      border-radius: 10px;
+      background-color: #f5f5f5;
+      margin-bottom: 20px;
+    }
+    h1 {
+      color: #333;
+    }
+    p {
+      line-height: 1.5;
+    }
+    .success {
+      color: green;
+      font-weight: bold;
+    }
+    .error {
+      color: red;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <h1>Expo Connection Tester</h1>
+  
+  <div class="container">
+    <p>This page helps to check if your device can connect to the Expo development server.</p>
+    <p>Status: <span id="status" class="error">Checking...</span></p>
+  </div>
+  
+  <div class="container">
+    <h2>Troubleshooting Tips</h2>
+    <ul>
+      <li>Make sure your device and computer are on the same network</li>
+      <li>Disable VPNs or firewalls that might block connections</li>
+      <li>Try using a different network (mobile data might work)</li>
+      <li>Restart both your device and the development server</li>
+    </ul>
+  </div>
+  
+  <script>
+    const status = document.getElementById('status');
+    
+    // Simple connection test
+    try {
+      status.textContent = 'Connection Successful!';
+      status.className = 'success';
+    } catch (e) {
+      status.textContent = 'Connection Failed: ' + e.message;
+      status.className = 'error';
+    }
+  </script>
+</body>
+</html> 
