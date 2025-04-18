@@ -1646,6 +1646,8 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: 20,
     fontWeight: 'bold',
+    flex: 1,
+    marginRight: 8,
   },
   headerButtons: {
     flexDirection: 'row',

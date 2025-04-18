@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Storage, Task, Stats, Badge } from '../types/storage';
+import { scheduleTaskReminder, cancelNotification } from './notifications';
 
 const STORAGE_KEY = '@productivity_app';
 
@@ -412,15 +413,100 @@ export function shouldEarnFreezeToken(stats: Stats): boolean {
   return shouldEarn;
 }
 
-export function getMotivationalMessage(): string {
-  const messages = [
-    'Great job! Keep up the momentum! 🚀',
+export function getMotivationalMessage(stats: Stats, context: 'taskComplete' | 'endDay'): string {
+
+  const taskCompleteMessages = [
+    'Task done! Great job! ✅',
+    'Nice! One task down. 💪',
+    'Completed! Keep the momentum going!',
+    'Excellent work on that task! 🌟',
+    'Task cleared! What\'s next?',
+    'Checked off the list! ✔️',
+    'Progress! That task is finished.',
+    'Well done! Keep crushing those tasks!',
+    'Task conquered! 🏆',
+    'Awesome focus on completing that!',
+  ];
+
+  const genericEndDayMessages = [ // Renamed from genericMessages for clarity
+    // Original messages:
+    'Great job today! Keep up the momentum! 🚀',
     'You\'re making progress! Keep going! 💪',
     'Another day conquered! 🌟',
     'You\'re on fire! 🔥',
     'Success is built one day at a time! ⭐',
+    // New generic messages (avoiding duplicates):
+    'Excellent work today! 💪',
+    'Great effort! Consistency is paying off!',
+    'Awesome day!',
+    'Keep up the fantastic work!',
+    'Every day counts!',
   ];
-  return messages[Math.floor(Math.random() * messages.length)];
+
+  const streakMessages: { [key: number]: string[] } = {
+    1: [
+      `Day ${stats.streak}! New streak started! Let's go!`,
+      'First day of the streak! Keep it rolling!',
+      'Streak initiated! 🔥',
+    ],
+    3: [
+      `3-day streak! Keep the consistency!`,
+      `Day 3! Building a great habit!`,
+    ],
+    7: [
+      `Wow, a 7-day streak! Incredible week!`,
+      `One week strong! Keep the fire alive!`,
+      `Amazing 7-day streak!`,
+    ],
+    14: [
+      `Two weeks! Your dedication is showing!`,
+      `14-day streak! Fantastic consistency!`,
+    ],
+    30: [
+      `30 days! That's a whole month of effort! Amazing!`,
+      `Incredible 30-day streak! You're unstoppable!`,
+    ],
+    // Add more milestones if desired
+  };
+
+  const dailyMessages: { [key: number]: string[] } = {
+     1: [
+       'First task of the day done! ✅',
+       'Starting the day strong!',
+       'Off to a great start!',
+     ],
+     // Add messages for completing e.g., 3 or 5 tasks if desired
+     // Example:
+     // 5: [
+     //   '5 tasks today! Great focus!',
+     //   'Hitting your stride! 5 tasks down!',
+     // ],
+  };
+
+  // --- Logic based on Context ---
+
+  if (context === 'taskComplete') {
+    // If a task was just completed, prioritize task completion messages
+    return taskCompleteMessages[Math.floor(Math.random() * taskCompleteMessages.length)];
+  }
+
+  // --- End Day Logic (context === 'endDay') ---
+
+  // Prioritize specific streak milestones at end of day
+  if (stats.streak > 0 && streakMessages[stats.streak]) {
+    const messages = streakMessages[stats.streak];
+    return messages[Math.floor(Math.random() * messages.length)];
+  }
+
+  // Message for specific daily task counts at end of day
+  // Ensure dailyTasksCompleted is a positive number before checking keys
+  if (stats.dailyTasksCompleted > 0 && dailyMessages[stats.dailyTasksCompleted]) {
+     const messages = dailyMessages[stats.dailyTasksCompleted];
+     return messages[Math.floor(Math.random() * messages.length)];
+  }
+
+  // Fallback to generic end-of-day messages
+  return genericEndDayMessages[Math.floor(Math.random() * genericEndDayMessages.length)];
 }
 
 /**
@@ -434,16 +520,25 @@ export async function autoEndDay(storage: Storage): Promise<Storage | null> {
   }
   
   console.log('[autoEndDay] A new day has been detected, processing auto-end-day');
+  console.log(`[autoEndDay] Received ${storage.tasks.length} tasks from previous day.`);
   
   // Count completed tasks for yesterday
   const completedTasks = storage.tasks.filter(task => task.completed);
   const totalTasks = storage.tasks.length;
+  
+  console.log(`[autoEndDay] Found ${completedTasks.length} completed tasks in the received storage data.`);
+  if (completedTasks.length > 0) {
+    console.log('[autoEndDay] Completed task titles:', completedTasks.map(t => t.title).join(', '));
+  } else {
+    console.log('[autoEndDay] No completed tasks found in the received storage data.');
+  }
+  
   const completionPercentage = totalTasks > 0 ? (completedTasks.length / totalTasks) * 100 : 0;
   
   // If we've completed at least 90% of tasks, or if we've completed at least one task, 
   // count it for the streak (this ensures people with just a few tasks don't lose their streak)
   const taskThresholdMet = completionPercentage >= 90 || (totalTasks > 0 && completedTasks.length > 0);
-  console.log(`[autoEndDay] Task threshold check: ${completedTasks.length} completed tasks out of ${totalTasks} total tasks`);
+  console.log(`[autoEndDay] Task threshold check: ${completedTasks.length} completed / ${totalTasks} total`);
   console.log(`[autoEndDay] Completion percentage: ${completionPercentage.toFixed(1)}%, threshold met: ${taskThresholdMet}`);
   
   // Handle streak based on task completion, similar to handleEndDay
@@ -550,22 +645,29 @@ export async function autoEndDay(storage: Storage): Promise<Storage | null> {
   // Check for Weekend Warrior badge
   const earnedWeekendWarrior = saturdayCompleted && sundayCompleted;
   
+  // Create new stats object explicitly to satisfy TypeScript
   const newStats = {
-    ...storage.stats,
-    streak: newStreak,
+    // Copy existing properties, ensuring correct types
+    streak: newStreak, 
     freezeTokens: newFreezeTokens,
     xp: newXp,
     pomodoroXp: 0, // Reset daily Pomodoro XP
+    totalPomodoros: storage.stats.totalPomodoros,
     level: newLevel,
-    lastEndDay: new Date().toISOString(),
+    lastEndDay: new Date().toISOString(), // Assign new string value
+    badges: storage.stats.badges || [], // Ensure badges is an array
+    tasksCompleted: storage.stats.tasksCompleted,
+    hardTasksCompleted: storage.stats.hardTasksCompleted,
+    notesCreated: storage.stats.notesCreated,
     dailyTasksCompleted: 0, // Reset for new day
     dailyPomodorosCompleted: 0, // Reset for new day
-    saturdayCompleted,
-    sundayCompleted,
+    calendarTasksCreated: storage.stats.calendarTasksCreated,
+    saturdayCompleted, // Updated value
+    sundayCompleted, // Updated value
   };
   
   // Add badges if earned
-  let updatedStats = newStats;
+  let updatedStats = newStats; // Type should be inferred correctly now
   
   // Daily Five badge
   if (earnedDailyFive && !storage.stats.badges.find(b => b.id === 'daily-five')?.earned) {
@@ -605,8 +707,8 @@ export async function autoEndDay(storage: Storage): Promise<Storage | null> {
     updatedStats = badgeStats;
   }
   
-  // Check and award other badges
-  updatedStats = checkAndAwardBadges(updatedStats);
+  // Check and award other badges using the correct function name
+  updatedStats = await checkAndUpdateBadges(updatedStats);
   
   const newStorage: Storage = {
     tasks: storage.tasks.map((task) => ({
@@ -615,6 +717,11 @@ export async function autoEndDay(storage: Storage): Promise<Storage | null> {
       pomodoroCount: 0,
       pomodoroActive: false,
       pomodoroEndTime: null,
+      // Keep date and time as they were
+      date: task.date,
+      time: task.time,
+      // Clear notification ID as task is reset
+      notificationId: undefined, 
     })),
     stats: updatedStats,
     notes: storage.notes,

@@ -655,7 +655,8 @@ export default function TasksScreen() {
       console.log('[handleToggleTask] Data saved successfully');
       setStorage(newStorage);
       // Show a motivational message when task is completed
-      setMessage(getMotivationalMessage());
+      // Pass the updated stats and context
+      setMessage(getMotivationalMessage(newStorage.stats, 'taskComplete')); 
     } catch (error) {
       console.error('[handleToggleTask] ERROR saving data:', error);
       Alert.alert(
@@ -822,8 +823,8 @@ export default function TasksScreen() {
       await setStorageData(newStorage);
       console.log('[handleEndDay] End of day data saved successfully');
       setStorage(newStorage);
-      // Use custom message if available, otherwise use motivational message
-      setMessage(customMessage || getMotivationalMessage());
+      // Use custom message if available, otherwise use motivational message with updated stats and context
+      setMessage(customMessage || getMotivationalMessage(newStorage.stats, 'endDay'));
     } catch (error) {
       console.error('[handleEndDay] ERROR saving end of day data:', error);
       Alert.alert(
@@ -972,19 +973,12 @@ export default function TasksScreen() {
       await cancelNotification(task.notificationId);
     }
     
-    // First, show the start notification with correct time info
-    try {
-      await schedulePomodoroStartNotification(endTime, task.title);
-      console.log(`[startPomodoro] Displayed start notification`);
-    } catch (startError) {
-      console.error('[startPomodoro] Error showing start notification:', startError);
-    }
-    
-    // Then schedule the end notification for when the timer finishes
+    // Schedule the end notification for when the timer finishes
     let notificationId;
     try {
-      notificationId = await schedulePomodoroEndNotification(endTime, task.title);
-      console.log(`[startPomodoro] Scheduled end notification with ID: ${notificationId}`);
+      // Pass task.id to the scheduling function
+      notificationId = await schedulePomodoroEndNotification(endTime, task.title, task.id); 
+      console.log(`[startPomodoro] Scheduled end notification with ID: ${notificationId} for task ${task.id}`);
     } catch (notifError) {
       console.error('[startPomodoro] Error scheduling end notification:', notifError);
       // Continue without notification
@@ -1067,31 +1061,19 @@ export default function TasksScreen() {
       return;
     }
     
-    // Cancel any existing notification for this task
-    if (task.notificationId) {
+    // Only cancel the notification if the timer is being stopped MANUALLY before completion
+    if (!isFullyCompleted && task.notificationId) {
       try {
         await cancelNotification(task.notificationId);
-        console.log(`[finishPomodoro] Canceled notification with ID: ${task.notificationId}`);
+        console.log(`[finishPomodoro] Manually stopping timer, canceled notification with ID: ${task.notificationId}`);
       } catch (cancelError) {
-        console.error('[finishPomodoro] Error canceling notification:', cancelError);
-        // Continue even if notification cancellation fails
+        console.error('[finishPomodoro] Error canceling notification during manual stop:', cancelError);
       }
+    } else if (isFullyCompleted) {
+      console.log(`[finishPomodoro] Timer completed naturally, allowing scheduled notification ${task.notificationId} to fire.`);
     }
-    
-    console.log(`[finishPomodoro] Timer fully completed: ${isFullyCompleted}`);
-    
-    // Schedule a completion notification only if the timer was fully completed
-    if (isFullyCompleted) {
-      try {
-        // REMOVED: All notification logic was here
-        // We rely entirely on the notification scheduled by schedulePomodoroEndNotification
-        // This notification is scheduled when the Pomodoro starts and will fire automatically
-        // when the timer ends
-        console.log(`[finishPomodoro] Timer completed - notification will be handled by the system`);
-      } catch (error) {
-        console.error('[finishPomodoro] Error:', error);
-      }
-    }
+
+    console.log(`[finishPomodoro] Timer fully completed flag: ${isFullyCompleted}`);
     
     // Play completion sound and vibrate (always give feedback even for manual stops)
     try {
@@ -1716,8 +1698,8 @@ export default function TasksScreen() {
 
         {message && (
               <View style={[styles.messageContainer, { backgroundColor: isDark ? '#1A1A1A' : '#FFFFFF' }]}>
-            <Text style={styles.messageIcon}>💡</Text>
-                <Text style={[styles.messageText, { color: isDark ? '#FFFFFF' : '#000000' }]}>{message}</Text>
+            <Text style={[styles.messageIcon, { fontSize: 18, textAlign: 'center' }]}>⭐</Text>
+                <Text style={[styles.messageText, { color: isDark ? '#FFFFFF' : '#000000', fontSize: 18, textAlign: 'center' }]}>{message}</Text>
           </View>
         )}
 
@@ -2091,11 +2073,14 @@ const styles = StyleSheet.create({
   },
   messageIcon: {
     marginRight: 8,
-    fontSize: 20,
+    fontSize: 18, // Reduced size
+    // transform: [{ translateY: 1 }], // Removed transform for now
   },
   messageText: {
     color: '#FFFFFF',
     flex: 1,
+    textAlign: 'center', // Center the message text
+    fontSize: 18, // Reduced size to match icon
   },
   taskMeta: {
     flexDirection: 'row',

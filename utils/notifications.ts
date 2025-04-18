@@ -886,136 +886,62 @@ export async function schedulePomodoroStartNotification(
 // Schedule a notification for the pomodoro timer end
 export async function schedulePomodoroEndNotification(
   endTime: Date,
-  taskTitle: string
+  taskTitle: string,
+  taskId: string // Add taskId for data payload
 ): Promise<string> {
   const settings = await getNotificationSettings();
   if (!settings.enabled || !settings.pomodoroAlerts) return '';
-  
-  // Make sure the end time is in the future
-  const now = new Date();
-  
-  // Ensure at least 1 minute in the future
-  const minTimeInFuture = 60 * 1000; // 1 minute in milliseconds
-  
-  if (endTime.getTime() - now.getTime() < minTimeInFuture) {
-    console.log(`[schedulePomodoroEndNotification] Warning: Pomodoro end time is too close (${endTime.toISOString()})`);
-    // Add at least 1 minute to ensure it's sufficiently in the future
-    endTime = new Date(now.getTime() + minTimeInFuture);
-    console.log(`[schedulePomodoroEndNotification] Adjusted end time to: ${endTime.toISOString()}`);
-  }
-  
-  console.log(`[schedulePomodoroEndNotification] Scheduling pomodoro notification for ${endTime.toISOString()}`);
-  
-  try {
-    // ONLY show an immediate notification that pomodoro has started
-    try {
-      const startNotificationId = await Notifications.scheduleNotificationAsync({
-        content: {
-          title: 'Pomodoro Timer Started',
-          body: `Your pomodoro session for "${taskTitle}" will end at ${endTime.toLocaleTimeString([], {hour: 'numeric', minute: '2-digit'})}.`,
-          sound: false, // No sound for the start notification
-          priority: Notifications.AndroidNotificationPriority.DEFAULT,
-          data: { 
-            type: 'pomodoro-start',
-            critical: false
-          },
-        },
-        trigger: null, // Send immediately
-      });
-      console.log(`[schedulePomodoroEndNotification] Displayed start notification with ID: ${startNotificationId}`);
-      
-      // Return the start notification ID - we'll handle the completion notification separately
-      // when the pomodoro actually ends in the finishPomodoro function
-      return startNotificationId;
-    } catch (startError) {
-      console.error('[schedulePomodoroEndNotification] Failed to show start notification:', startError);
-      return '';
-    }
-  } catch (error) {
-    console.error('[schedulePomodoroEndNotification] Error scheduling notification:', error);
-    return '';
-  }
-}
 
-// Schedule an immediate notification for pomodoro completion
-export async function schedulePomodoroCompletionNotification(
-  taskTitle: string
-): Promise<string> {
-  const settings = await getNotificationSettings();
-  if (!settings.enabled || !settings.pomodoroAlerts) return '';
-  
-  console.log(`[schedulePomodoroCompletionNotification] Scheduling immediate completion notification`);
-  
+  const now = new Date();
+  const minTimeInFuture = 1000; // 1 second minimum delay
+
+  if (endTime.getTime() - now.getTime() < minTimeInFuture) {
+    console.log(`[schedulePomodoroEndNotification] Warning: Pomodoro end time is too close (${endTime.toISOString()}), adjusting slightly`);
+    endTime = new Date(now.getTime() + minTimeInFuture);
+  }
+
+  console.log(`[schedulePomodoroEndNotification] Scheduling pomodoro END notification for ${endTime.toISOString()} for task ${taskId}`);
+
   try {
-    // Prepare content with maximum priority settings for all platforms
-    const enhancedContent = {
-      title: 'POMODORO COMPLETE!',
-      body: `Your pomodoro session for "${taskTitle}" has finished.`,
-      sound: true,
-      priority: Notifications.AndroidNotificationPriority.MAX,
-      data: { 
-        type: 'pomodoro-end', 
-        critical: true,
-        autoDismiss: false,
-        taskTitle,
-        isCompletion: true,
-        timestamp: new Date().toISOString()
-      },
-      autoDismiss: false,
-    };
-    
-    // For iOS, add critical flags
-    if (Platform.OS === 'ios') {
-      // @ts-ignore - iOS specific properties
-      enhancedContent._displayInForeground = true;
-      // @ts-ignore
-      enhancedContent.categoryIdentifier = 'pomodoro';
-      // @ts-ignore
-      enhancedContent._criticalVolume = 1.0; // Maximum volume
-      // @ts-ignore
-      enhancedContent._criticalness = 1; // Maximum critical level
-    }
-    
-    // Create the notification with these enhanced settings
     const notificationId = await Notifications.scheduleNotificationAsync({
-      content: enhancedContent,
-      trigger: null // Deliver immediately
+      content: {
+        title: 'POMODORO COMPLETE!',
+        body: `Your pomodoro session for "${taskTitle}" has finished.`,
+        sound: 'timer.mp3', // Use the specific sound file
+        priority: Notifications.AndroidNotificationPriority.MAX, // Use max priority
+        data: { 
+          type: 'pomodoro-end',
+          critical: true,
+          taskId: taskId, // Include taskId
+          taskTitle: taskTitle,
+        },
+        vibrationPattern: [0, 250, 250, 250], // Default vibration
+        // iOS specific high-priority settings
+        ...(Platform.OS === 'ios' && {
+          // @ts-ignore
+          _displayInForeground: true,
+          // @ts-ignore
+          categoryIdentifier: 'pomodoro', // Ensure a category exists
+          // @ts-ignore
+          interruptionLevel: 'critical', // Use 'critical' for iOS 15+
+          // @ts-ignore
+          sound: {
+            name: 'timer.mp3',
+            critical: 1, // Enable critical alert sound
+            volume: 1.0, // Max volume
+          },
+        }),
+      },
+      trigger: { 
+        date: endTime, // Trigger at the specific end time
+        channelId: 'pomodoro', // Use the high-priority channel for Android
+      },
     });
-    
-    // Also trigger a sound and vibration directly (belt and suspenders approach)
-    try {
-      // Set audio to play at max volume even in silent mode
-      await Audio.setAudioModeAsync({
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: true,
-        shouldDuckAndroid: false,
-      });
-      
-      // Play the sound directly as well
-      playSound('pomodoro-end').catch(err => 
-        console.error('Error playing direct pomodoro sound:', err)
-      );
-      
-      // For Android, use native vibration pattern
-      if (Platform.OS === 'android') {
-        try {
-          // Use a more aggressive vibration pattern
-          Vibration.vibrate([0, 500, 200, 500, 200, 500]);
-        } catch (vibErr) {
-          console.error('Error with direct vibration:', vibErr);
-        }
-      }
-      
-      // Use haptics for additional feedback
-      vibrate().catch(err => console.error('Error with haptic vibration:', err));
-    } catch (feedbackError) {
-      console.error('[schedulePomodoroCompletionNotification] Error with direct feedback:', feedbackError);
-    }
-    
-    console.log(`[schedulePomodoroCompletionNotification] Successfully scheduled immediate notification with ID: ${notificationId}`);
+
+    console.log(`[schedulePomodoroEndNotification] Successfully scheduled END notification with ID: ${notificationId} for time ${endTime.toISOString()}`);
     return notificationId;
   } catch (error) {
-    console.error('[schedulePomodoroCompletionNotification] Error scheduling notification:', error);
+    console.error('[schedulePomodoroEndNotification] Error scheduling end notification:', error);
     return '';
   }
 }
