@@ -1,8 +1,14 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Storage, Task, Stats, Badge } from '../types/storage';
-import { scheduleTaskReminder, cancelNotification } from './notifications';
+import { 
+    scheduleStreakMilestoneNotification, 
+    scheduleAchievementUnlockNotification,
+    cancelNotification,
+    scheduleTaskReminder // Keep if used, though placeholder in scheduler
+} from './notificationScheduler'; 
+import * as Notifications from 'expo-notifications'; // Keep if needed for other things
 
-const STORAGE_KEY = '@productivity_app';
+const STORAGE_KEY = '@productivity_app'; // Restore the missing constant
 
 export const DEFAULT_BADGES: Badge[] = [
   // Beginner badges - Easy to obtain
@@ -645,8 +651,7 @@ export async function autoEndDay(storage: Storage): Promise<Storage | null> {
   // Check for Weekend Warrior badge
   const earnedWeekendWarrior = saturdayCompleted && sundayCompleted;
   
-  // Create new stats object explicitly to satisfy TypeScript
-  const newStats = {
+  const newStats: Stats = {
     // Copy existing properties, ensuring correct types
     streak: newStreak, 
     freezeTokens: newFreezeTokens,
@@ -654,7 +659,8 @@ export async function autoEndDay(storage: Storage): Promise<Storage | null> {
     pomodoroXp: 0, // Reset daily Pomodoro XP
     totalPomodoros: storage.stats.totalPomodoros,
     level: newLevel,
-    lastEndDay: new Date().toISOString(), // Assign new string value
+    // Ensure lastEndDay is always a string when assigning here
+    lastEndDay: new Date().toISOString(), 
     badges: storage.stats.badges || [], // Ensure badges is an array
     tasksCompleted: storage.stats.tasksCompleted,
     hardTasksCompleted: storage.stats.hardTasksCompleted,
@@ -666,50 +672,38 @@ export async function autoEndDay(storage: Storage): Promise<Storage | null> {
     sundayCompleted, // Updated value
   };
   
-  // Add badges if earned
-  let updatedStats = newStats; // Type should be inferred correctly now
-  
-  // Daily Five badge
+  // Add badges if earned (Daily Five, Weekend Warrior)
+  let statsWithEarnedBadges = { ...newStats }; // Create a mutable copy 
+
+  // Daily Five badge check (moved before checkAndUpdateBadges)
   if (earnedDailyFive && !storage.stats.badges.find(b => b.id === 'daily-five')?.earned) {
-    const badgeStats = {
-      ...updatedStats,
-      badges: [
-        ...updatedStats.badges,
-        {
-          id: 'daily-five',
-          title: 'Daily Five',
-          description: 'Complete 5 tasks in a single day',
-          emoji: '✋',
-          earned: true,
-          earnedAt: new Date().toISOString(),
-        }
-      ]
-    };
-    updatedStats = badgeStats;
+      const dailyFiveBadge = DEFAULT_BADGES.find(b => b.id === 'daily-five');
+      if(dailyFiveBadge) {
+          statsWithEarnedBadges.badges = [
+              ...statsWithEarnedBadges.badges,
+              { ...dailyFiveBadge, earned: true, earnedAt: new Date().toISOString() }
+          ];
+          // Don't schedule here, let checkAndUpdateBadges handle it
+      }
   }
   
-  // Weekend Warrior badge
-  if (earnedWeekendWarrior && !updatedStats.badges.find(b => b.id === 'weekend-warrior')?.earned) {
-    const badgeStats = {
-      ...updatedStats,
-      badges: [
-        ...updatedStats.badges,
-        {
-          id: 'weekend-warrior',
-          title: 'Weekend Warrior',
-          description: 'Complete tasks on both Saturday and Sunday',
-          emoji: '🏆',
-          earned: true,
-          earnedAt: new Date().toISOString(),
-        }
-      ]
-    };
-    updatedStats = badgeStats;
+  // Weekend Warrior badge check (moved before checkAndUpdateBadges)
+  if (earnedWeekendWarrior && !statsWithEarnedBadges.badges.find(b => b.id === 'weekend-warrior')?.earned) {
+      const weekendWarriorBadge = DEFAULT_BADGES.find(b => b.id === 'weekend-warrior');
+      if(weekendWarriorBadge) {
+          statsWithEarnedBadges.badges = [
+              ...statsWithEarnedBadges.badges,
+              { ...weekendWarriorBadge, earned: true, earnedAt: new Date().toISOString() }
+          ];
+          // Don't schedule here, let checkAndUpdateBadges handle it
+      }
   }
   
   // Check and award other badges using the correct function name
-  updatedStats = await checkAndUpdateBadges(updatedStats);
+  // This function now returns Stats which might have null lastEndDay, handle it:
+  const finalStatsAfterBadgeCheck = await checkAndUpdateBadges(statsWithEarnedBadges);
   
+  // Create the final newStorage object using the result from checkAndUpdateBadges
   const newStorage: Storage = {
     tasks: storage.tasks.map((task) => ({
       ...task,
@@ -717,13 +711,16 @@ export async function autoEndDay(storage: Storage): Promise<Storage | null> {
       pomodoroCount: 0,
       pomodoroActive: false,
       pomodoroEndTime: null,
-      // Keep date and time as they were
-      date: task.date,
-      time: task.time,
-      // Clear notification ID as task is reset
+      date: task.date, // Keep original date
+      time: task.time, // Keep original time
       notificationId: undefined, 
     })),
-    stats: updatedStats,
+    // Use the potentially updated stats from checkAndUpdateBadges
+    stats: {
+        ...finalStatsAfterBadgeCheck,
+        // Ensure lastEndDay is definitely a string for the Storage type
+        lastEndDay: finalStatsAfterBadgeCheck.lastEndDay ?? new Date().toISOString(), 
+    },
     notes: storage.notes,
   };
   
@@ -1040,6 +1037,8 @@ export function checkAndAwardBadges(stats: Stats): Stats {
 
 export async function checkAndUpdateBadges(stats: Stats): Promise<Stats> {
   const newStats = { ...stats };
+  // Store original badge state to detect newly earned badges
+  const originalBadges = [...stats.badges]; 
   let updated = false;
 
   // Recalculate level based on XP to ensure it's correct
@@ -1050,252 +1049,119 @@ export async function checkAndUpdateBadges(stats: Stats): Promise<Stats> {
     updated = true;
   }
 
-  // First Step badge
-  if (!stats.badges.find(b => b.id === 'first-step')?.earned && stats.tasksCompleted >= 1) {
-    const badgeIndex = newStats.badges.findIndex(b => b.id === 'first-step');
-    if (badgeIndex !== -1) {
-      newStats.badges[badgeIndex].earned = true;
-      newStats.badges[badgeIndex].earnedAt = new Date().toISOString();
-      updated = true;
+  // Define a helper to check and update a badge
+  const checkBadge = (id: string, condition: boolean) => {
+    const originalBadge = originalBadges.find(b => b.id === id);
+    const currentBadgeIndex = newStats.badges.findIndex(b => b.id === id);
+    
+    // Check if condition is met AND the badge wasn't already earned
+    if (condition && (!originalBadge || !originalBadge.earned)) {
+      if (currentBadgeIndex !== -1) {
+        // Badge exists, update it
+        if (!newStats.badges[currentBadgeIndex].earned) {
+          newStats.badges[currentBadgeIndex].earned = true;
+          newStats.badges[currentBadgeIndex].earnedAt = new Date().toISOString();
+          updated = true;
+          // **NEW:** Schedule notification for the newly earned badge
+          scheduleAchievementUnlockNotification(newStats.badges[currentBadgeIndex].title);
+        }
+      } else {
+        // Badge doesn't exist in current list (this shouldn't happen if DEFAULT_BADGES are loaded correctly)
+        // For safety, find definition in DEFAULT_BADGES and add it
+        const badgeDefinition = DEFAULT_BADGES.find(b => b.id === id);
+        if(badgeDefinition) {
+            newStats.badges.push({
+                ...badgeDefinition,
+                earned: true,
+                earnedAt: new Date().toISOString(),
+            });
+            updated = true;
+            // **NEW:** Schedule notification
+            scheduleAchievementUnlockNotification(badgeDefinition.title);
+        }
+      }
     }
-  }
+  };
 
-  // Getting Started (3-day streak)
-  if (!stats.badges.find(b => b.id === 'three-day-streak')?.earned && stats.streak >= 3) {
-    const badgeIndex = newStats.badges.findIndex(b => b.id === 'three-day-streak');
-    if (badgeIndex !== -1) {
-      newStats.badges[badgeIndex].earned = true;
-      newStats.badges[badgeIndex].earnedAt = new Date().toISOString();
-      updated = true;
-    }
-  }
+  // Check each badge using the helper
+  checkBadge('first-step', stats.tasksCompleted >= 1);
+  checkBadge('three-day-streak', stats.streak >= 3);
+  checkBadge('streak-hero', stats.streak >= 5);
+  checkBadge('consistent-streak', stats.streak >= 10);
+  checkBadge('month-streak', stats.streak >= 30);
+  checkBadge('daily-five', stats.dailyTasksCompleted >= 5);
+  checkBadge('xp-earner', stats.xp >= 100);
+  checkBadge('xp-master', stats.xp >= 250);
+  checkBadge('xp-legend', stats.xp >= 500);
+  checkBadge('xp-titan', stats.xp >= 1000);
+  checkBadge('xp-immortal', stats.xp >= 5000);
+  checkBadge('pomodoro-pro', stats.totalPomodoros >= 10);
+  checkBadge('pomodoro-master', stats.totalPomodoros >= 25);
+  checkBadge('ultimate-pomodoro', stats.totalPomodoros >= 50);
+  checkBadge('task-master', stats.tasksCompleted >= 20);
+  checkBadge('task-legend', stats.tasksCompleted >= 100);
+  checkBadge('hard-worker', stats.hardTasksCompleted >= 5);
+  checkBadge('heavy-lifter', stats.hardTasksCompleted >= 15);
+  checkBadge('note-beginner', stats.notesCreated >= 1);
+  checkBadge('note-taker', stats.notesCreated >= 5);
+  checkBadge('organization-expert', stats.notesCreated >= 15);
+  checkBadge('extreme-focus', stats.dailyPomodorosCompleted >= 5);
+  checkBadge('weekend-warrior', stats.saturdayCompleted && stats.sundayCompleted);
+  checkBadge('planner', stats.calendarTasksCreated >= 5);
 
-  // Streak Hero (5-day streak)
-  if (!stats.badges.find(b => b.id === 'streak-hero')?.earned && stats.streak >= 5) {
-    const badgeIndex = newStats.badges.findIndex(b => b.id === 'streak-hero');
-    if (badgeIndex !== -1) {
-      newStats.badges[badgeIndex].earned = true;
-      newStats.badges[badgeIndex].earnedAt = new Date().toISOString();
-      updated = true;
-    }
+  // --- Handle "Productivity Guru" (Earn all others) --- 
+  const guruBadgeId = 'productivity-guru';
+  const originalGuruBadge = originalBadges.find(b => b.id === guruBadgeId);
+  if (!originalGuruBadge || !originalGuruBadge.earned) {
+      const allOtherBadgeIds = DEFAULT_BADGES
+        .filter(badge => badge.id !== guruBadgeId)
+        .map(badge => badge.id);
+      
+      // Check if all *other* badges are now marked as earned in newStats.badges
+      const hasAllBadges = allOtherBadgeIds.every(id => 
+        newStats.badges.some(badge => badge.id === id && badge.earned)
+      );
+      
+      if (hasAllBadges) {
+          const guruBadgeIndex = newStats.badges.findIndex(b => b.id === guruBadgeId);
+          const guruBadgeDefinition = DEFAULT_BADGES.find(b => b.id === guruBadgeId);
+          if (guruBadgeIndex !== -1) {
+              if (!newStats.badges[guruBadgeIndex].earned) {
+                  newStats.badges[guruBadgeIndex].earned = true;
+                  newStats.badges[guruBadgeIndex].earnedAt = new Date().toISOString();
+                  updated = true;
+                  // **NEW:** Schedule notification
+                  scheduleAchievementUnlockNotification(newStats.badges[guruBadgeIndex].title);
+              }
+          } else if (guruBadgeDefinition) {
+              // Add if missing
+              newStats.badges.push({
+                  ...guruBadgeDefinition,
+                  earned: true,
+                  earnedAt: new Date().toISOString(),
+              });
+              updated = true;
+              // **NEW:** Schedule notification
+              scheduleAchievementUnlockNotification(guruBadgeDefinition.title);
+          }
+      }
   }
-  
-  // Consistency King (10-day streak)
-  if (!stats.badges.find(b => b.id === 'consistent-streak')?.earned && stats.streak >= 10) {
-    const badgeIndex = newStats.badges.findIndex(b => b.id === 'consistent-streak');
-    if (badgeIndex !== -1) {
-      newStats.badges[badgeIndex].earned = true;
-      newStats.badges[badgeIndex].earnedAt = new Date().toISOString();
-      updated = true;
-    }
-  }
-  
-  // Monthly Mastery (30-day streak)
-  if (!stats.badges.find(b => b.id === 'month-streak')?.earned && stats.streak >= 30) {
-    const badgeIndex = newStats.badges.findIndex(b => b.id === 'month-streak');
-    if (badgeIndex !== -1) {
-      newStats.badges[badgeIndex].earned = true;
-      newStats.badges[badgeIndex].earnedAt = new Date().toISOString();
-      updated = true;
-    }
-  }
-  
-  // Daily Five
-  if (!stats.badges.find(b => b.id === 'daily-five')?.earned && stats.dailyTasksCompleted >= 5) {
-    const badgeIndex = newStats.badges.findIndex(b => b.id === 'daily-five');
-    if (badgeIndex !== -1) {
-      newStats.badges[badgeIndex].earned = true;
-      newStats.badges[badgeIndex].earnedAt = new Date().toISOString();
-      updated = true;
-    }
-  }
-  
-  // XP earner
-  if (!stats.badges.find(b => b.id === 'xp-earner')?.earned && stats.xp >= 100) {
-    const badgeIndex = newStats.badges.findIndex(b => b.id === 'xp-earner');
-    if (badgeIndex !== -1) {
-      newStats.badges[badgeIndex].earned = true;
-      newStats.badges[badgeIndex].earnedAt = new Date().toISOString();
-      updated = true;
-    }
-  }
-  
-  // XP Master
-  if (!stats.badges.find(b => b.id === 'xp-master')?.earned && stats.xp >= 250) {
-    const badgeIndex = newStats.badges.findIndex(b => b.id === 'xp-master');
-    if (badgeIndex !== -1) {
-      newStats.badges[badgeIndex].earned = true;
-      newStats.badges[badgeIndex].earnedAt = new Date().toISOString();
-      updated = true;
-    }
-  }
-  
-  // XP Legend
-  if (!stats.badges.find(b => b.id === 'xp-legend')?.earned && stats.xp >= 500) {
-    const badgeIndex = newStats.badges.findIndex(b => b.id === 'xp-legend');
-    if (badgeIndex !== -1) {
-      newStats.badges[badgeIndex].earned = true;
-      newStats.badges[badgeIndex].earnedAt = new Date().toISOString();
-      updated = true;
-    }
-  }
-  
-  // XP Titan
-  if (!stats.badges.find(b => b.id === 'xp-titan')?.earned && stats.xp >= 1000) {
-    const badgeIndex = newStats.badges.findIndex(b => b.id === 'xp-titan');
-    if (badgeIndex !== -1) {
-      newStats.badges[badgeIndex].earned = true;
-      newStats.badges[badgeIndex].earnedAt = new Date().toISOString();
-      updated = true;
-    }
-  }
-  
-  // XP Immortal
-  if (!stats.badges.find(b => b.id === 'xp-immortal')?.earned && stats.xp >= 5000) {
-    const badgeIndex = newStats.badges.findIndex(b => b.id === 'xp-immortal');
-    if (badgeIndex !== -1) {
-      newStats.badges[badgeIndex].earned = true;
-      newStats.badges[badgeIndex].earnedAt = new Date().toISOString();
-      updated = true;
-    }
-  }
-  
-  // Pomodoro Pro
-  if (!stats.badges.find(b => b.id === 'pomodoro-pro')?.earned && stats.totalPomodoros >= 10) {
-    const badgeIndex = newStats.badges.findIndex(b => b.id === 'pomodoro-pro');
-    if (badgeIndex !== -1) {
-      newStats.badges[badgeIndex].earned = true;
-      newStats.badges[badgeIndex].earnedAt = new Date().toISOString();
-      updated = true;
-    }
-  }
-  
-  // Pomodoro Master
-  if (!stats.badges.find(b => b.id === 'pomodoro-master')?.earned && stats.totalPomodoros >= 25) {
-    const badgeIndex = newStats.badges.findIndex(b => b.id === 'pomodoro-master');
-    if (badgeIndex !== -1) {
-      newStats.badges[badgeIndex].earned = true;
-      newStats.badges[badgeIndex].earnedAt = new Date().toISOString();
-      updated = true;
-    }
-  }
-  
-  // Ultimate Pomodoro
-  if (!stats.badges.find(b => b.id === 'ultimate-pomodoro')?.earned && stats.totalPomodoros >= 50) {
-    const badgeIndex = newStats.badges.findIndex(b => b.id === 'ultimate-pomodoro');
-    if (badgeIndex !== -1) {
-      newStats.badges[badgeIndex].earned = true;
-      newStats.badges[badgeIndex].earnedAt = new Date().toISOString();
-      updated = true;
-    }
-  }
-  
-  // Task Master
-  if (!stats.badges.find(b => b.id === 'task-master')?.earned && stats.tasksCompleted >= 20) {
-    const badgeIndex = newStats.badges.findIndex(b => b.id === 'task-master');
-    if (badgeIndex !== -1) {
-      newStats.badges[badgeIndex].earned = true;
-      newStats.badges[badgeIndex].earnedAt = new Date().toISOString();
-      updated = true;
-    }
-  }
-  
-  // Task Legend
-  if (!stats.badges.find(b => b.id === 'task-legend')?.earned && stats.tasksCompleted >= 100) {
-    const badgeIndex = newStats.badges.findIndex(b => b.id === 'task-legend');
-    if (badgeIndex !== -1) {
-      newStats.badges[badgeIndex].earned = true;
-      newStats.badges[badgeIndex].earnedAt = new Date().toISOString();
-      updated = true;
-    }
-  }
-  
-  // Hard Worker
-  if (!stats.badges.find(b => b.id === 'hard-worker')?.earned && stats.hardTasksCompleted >= 5) {
-    const badgeIndex = newStats.badges.findIndex(b => b.id === 'hard-worker');
-    if (badgeIndex !== -1) {
-      newStats.badges[badgeIndex].earned = true;
-      newStats.badges[badgeIndex].earnedAt = new Date().toISOString();
-      updated = true;
-    }
-  }
-  
-  // Heavy Lifter
-  if (!stats.badges.find(b => b.id === 'heavy-lifter')?.earned && stats.hardTasksCompleted >= 15) {
-    const badgeIndex = newStats.badges.findIndex(b => b.id === 'heavy-lifter');
-    if (badgeIndex !== -1) {
-      newStats.badges[badgeIndex].earned = true;
-      newStats.badges[badgeIndex].earnedAt = new Date().toISOString();
-      updated = true;
-    }
-  }
-  
-  // Note Taker
-  if (!stats.badges.find(b => b.id === 'note-beginner')?.earned && stats.notesCreated >= 1) {
-    const badgeIndex = newStats.badges.findIndex(b => b.id === 'note-beginner');
-    if (badgeIndex !== -1) {
-      newStats.badges[badgeIndex].earned = true;
-      newStats.badges[badgeIndex].earnedAt = new Date().toISOString();
-      updated = true;
-    }
-  }
-  
-  // Note Expert
-  if (!stats.badges.find(b => b.id === 'note-taker')?.earned && stats.notesCreated >= 5) {
-    const badgeIndex = newStats.badges.findIndex(b => b.id === 'note-taker');
-    if (badgeIndex !== -1) {
-      newStats.badges[badgeIndex].earned = true;
-      newStats.badges[badgeIndex].earnedAt = new Date().toISOString();
-      updated = true;
-    }
-  }
-  
-  // Organization Expert
-  if (!stats.badges.find(b => b.id === 'organization-expert')?.earned && stats.notesCreated >= 15) {
-    const badgeIndex = newStats.badges.findIndex(b => b.id === 'organization-expert');
-    if (badgeIndex !== -1) {
-      newStats.badges[badgeIndex].earned = true;
-      newStats.badges[badgeIndex].earnedAt = new Date().toISOString();
-      updated = true;
-    }
-  }
-  
-  // Extreme Focus
-  if (!stats.badges.find(b => b.id === 'extreme-focus')?.earned && stats.dailyPomodorosCompleted >= 5) {
-    const badgeIndex = newStats.badges.findIndex(b => b.id === 'extreme-focus');
-    if (badgeIndex !== -1) {
-      newStats.badges[badgeIndex].earned = true;
-      newStats.badges[badgeIndex].earnedAt = new Date().toISOString();
-      updated = true;
-    }
-  }
-  
-  // Weekend Warrior
-  if (!stats.badges.find(b => b.id === 'weekend-warrior')?.earned && stats.saturdayCompleted && stats.sundayCompleted) {
-    const badgeIndex = newStats.badges.findIndex(b => b.id === 'weekend-warrior');
-    if (badgeIndex !== -1) {
-      newStats.badges[badgeIndex].earned = true;
-      newStats.badges[badgeIndex].earnedAt = new Date().toISOString();
-      updated = true;
-    }
-  }
-  
-  // Planner
-  if (!stats.badges.find(b => b.id === 'planner')?.earned && stats.calendarTasksCreated >= 5) {
-    const badgeIndex = newStats.badges.findIndex(b => b.id === 'planner');
-    if (badgeIndex !== -1) {
-      newStats.badges[badgeIndex].earned = true;
-      newStats.badges[badgeIndex].earnedAt = new Date().toISOString();
-      updated = true;
-    }
-  }
+  // --- End Productivity Guru --- 
 
+  // Only save if actual badge status changed (or level updated)
   if (updated) {
-    const storage = await getStorageData();
-    await AsyncStorage.setItem(STORAGE_KEY, JSON.stringify({
-      ...storage,
-      stats: newStats
-    }));
+    try {
+      // Fetch current full storage to avoid overwriting unrelated parts
+      const currentStorage = await getStorageData(); 
+      await setStorageData({ // Use setStorageData to save
+        ...currentStorage,
+        stats: newStats // Only update the stats part
+      });
+      console.log('[checkAndUpdateBadges] Updated badges/level and saved.');
+    } catch (saveError) {
+        console.error('[checkAndUpdateBadges] Error saving updated badges/level:', saveError);
+        // Continue with newStats in memory even if save fails
+    }
   }
 
   return newStats;

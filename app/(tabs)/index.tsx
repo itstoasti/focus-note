@@ -27,9 +27,11 @@ import {
   playSound,
   vibrate,
   schedulePomodoroCompletionNotification,
-  schedulePomodoroStartNotification
-} from '../../utils/notifications';
+  schedulePomodoroStartNotification,
+  scheduleStreakMilestoneNotification
+} from '../../utils/notificationScheduler';
 import DateTimePickerModal from "react-native-modal-datetime-picker";
+import * as Notifications from 'expo-notifications';
 
 // Add the missing isFutureDate function
 function isFutureDate(date: Date): boolean {
@@ -720,7 +722,8 @@ export default function TasksScreen() {
     let newStreak;
     let newFreezeTokens = storage.stats.freezeTokens;
     let customMessage = null;
-    
+    const oldStreak = storage.stats.streak; // Store old streak for milestone check
+
     if (meetStreakThreshold) {
       // If we completed tasks, increment streak
       newStreak = storage.stats.streak + 1;
@@ -779,6 +782,8 @@ export default function TasksScreen() {
       dailyPomodorosCompleted: 0, // Reset for new day
       saturdayCompleted,
       sundayCompleted,
+      // Ensure badges array exists
+      badges: storage.stats.badges || [], 
     };
 
     // Check and award badges
@@ -813,6 +818,7 @@ export default function TasksScreen() {
         pomodoroActive: false,
         pomodoroEndTime: null,
         date: task.date || new Date().toISOString(),
+        notificationId: undefined, // Ensure notification ID is cleared
       })),
       stats: updatedStats,
       notes: storage.notes,
@@ -825,6 +831,12 @@ export default function TasksScreen() {
       setStorage(newStorage);
       // Use custom message if available, otherwise use motivational message with updated stats and context
       setMessage(customMessage || getMotivationalMessage(newStorage.stats, 'endDay'));
+
+      // **NEW:** Schedule streak milestone notification if applicable
+      if (newStreak > oldStreak) { // Only trigger if streak actually increased
+         await scheduleStreakMilestoneNotification(newStreak);
+      }
+
     } catch (error) {
       console.error('[handleEndDay] ERROR saving end of day data:', error);
       Alert.alert(
@@ -842,9 +854,11 @@ export default function TasksScreen() {
     const task = storage.tasks.find(t => t.id === taskId);
     if (!task) return;
     
-    // Cancel any existing notification for this task
+    // Cancel any existing *scheduled* end notification for this task
     if (task.notificationId) {
-      await cancelNotification(task.notificationId);
+      // Use the direct Expo API for cancellation
+      await Notifications.cancelScheduledNotificationAsync(task.notificationId);
+      console.log(`[cancelPomodoro] Canceled notification ID: ${task.notificationId}`);
     }
     
     const newTasks = storage.tasks.map(task => 
@@ -968,20 +982,27 @@ export default function TasksScreen() {
     const endTime = new Date();
     endTime.setMinutes(endTime.getMinutes() + 25);
     
-    // Cancel any existing notification for this task
+    // Cancel any previous notification remnants (shouldn't be necessary, but safe)
     if (task.notificationId) {
-      await cancelNotification(task.notificationId);
+      await Notifications.cancelScheduledNotificationAsync(task.notificationId); 
     }
     
-    // Schedule the end notification for when the timer finishes
-    let notificationId;
+    // **NEW:** Schedule Start Notification (Silent)
     try {
-      // Pass task.id to the scheduling function
-      notificationId = await schedulePomodoroEndNotification(endTime, task.title, task.id); 
-      console.log(`[startPomodoro] Scheduled end notification with ID: ${notificationId} for task ${task.id}`);
-    } catch (notifError) {
-      console.error('[startPomodoro] Error scheduling end notification:', notifError);
-      // Continue without notification
+        await schedulePomodoroStartNotification(task.title);
+        console.log(`[startPomodoro] Scheduled silent start notification for task ${task.id}`);
+    } catch (startNotifError) {
+        console.error('[startPomodoro] Error scheduling start notification:', startNotifError);
+    }
+
+    // **UPDATED:** Schedule the End Notification (with sound/vibration)
+    let endNotificationId;
+    try {
+      endNotificationId = await schedulePomodoroEndNotification(endTime, task.title, task.id);
+      console.log(`[startPomodoro] Scheduled END notification with ID: ${endNotificationId} for task ${task.id}`);
+    } catch (endNotifError) {
+      console.error('[startPomodoro] Error scheduling end notification:', endNotifError);
+      // Continue without end notification if scheduling fails
     }
     
     const newTasks = storage.tasks.map(t => 
@@ -989,7 +1010,7 @@ export default function TasksScreen() {
         ...t,
         pomodoroActive: true,
         pomodoroEndTime: endTime.toISOString(),
-        notificationId // Store the notification ID
+        notificationId: endNotificationId // Store the END notification ID
       } : t
     );
     
@@ -1061,41 +1082,22 @@ export default function TasksScreen() {
       return;
     }
     
-    // Only cancel the notification if the timer is being stopped MANUALLY before completion
+    // Only cancel the *scheduled* end notification if the timer is being stopped MANUALLY
     if (!isFullyCompleted && task.notificationId) {
       try {
-        await cancelNotification(task.notificationId);
-        console.log(`[finishPomodoro] Manually stopping timer, canceled notification with ID: ${task.notificationId}`);
+        // Use direct Expo API for cancellation
+        await Notifications.cancelScheduledNotificationAsync(task.notificationId);
+        console.log(`[finishPomodoro] Manually stopping timer, canceled notification ID: ${task.notificationId}`);
       } catch (cancelError) {
         console.error('[finishPomodoro] Error canceling notification during manual stop:', cancelError);
       }
     } else if (isFullyCompleted) {
-      console.log(`[finishPomodoro] Timer completed naturally, allowing scheduled notification ${task.notificationId} to fire.`);
+      // If completed naturally, the scheduled notification should fire on its own.
+      // No need to schedule a new one here.
+      console.log(`[finishPomodoro] Timer completed naturally. Scheduled notification ${task.notificationId} should fire.`);
     }
 
     console.log(`[finishPomodoro] Timer fully completed flag: ${isFullyCompleted}`);
-    
-    // Play completion sound and vibrate (always give feedback even for manual stops)
-    try {
-      console.log('[finishPomodoro] Playing completion sound...');
-      await playSound('pomodoro-end');
-      console.log('[finishPomodoro] Sound played successfully');
-      await vibrate();
-      console.log('[finishPomodoro] Played completion sound and vibration');
-    } catch (soundError) {
-      console.error("[finishPomodoro] Error with sound or vibration:", soundError);
-      
-      // Try falling back to basic vibration if haptics also failed
-      try {
-        console.log('[finishPomodoro] Falling back to basic vibration...');
-        if (Platform.OS === 'ios' || Platform.OS === 'android') {
-          Vibration.vibrate([300, 200, 300]);
-          console.log('[finishPomodoro] Basic vibration completed');
-        }
-      } catch (vibrationError) {
-        console.error('[finishPomodoro] All feedback methods failed:', vibrationError);
-      }
-    }
     
     // Only update stats and award XP if timer was fully completed
     let updatedStats = { ...storage.stats };

@@ -6,11 +6,11 @@ import * as Notifications from 'expo-notifications';
 import { 
   initializeNotifications, 
   registerForPushNotifications, 
-  scheduleStreakReminder,
   handleReceivedNotification,
   initAudioSystem,
   preloadSounds
 } from '../utils/notifications';
+import { scheduleDailyStreakReminder as scheduleStreakReminder } from '../utils/notificationScheduler';
 
 type Theme = 'light' | 'dark' | 'system';
 

@@ -1,14 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, StyleSheet, Switch, TouchableOpacity, ScrollView, TextInput, Alert } from 'react-native';
+import { View, Text, StyleSheet, Switch, TouchableOpacity, ScrollView, TextInput, Alert, Platform, ActivityIndicator } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTheme } from '../../context/ThemeContext';
 import { Separator } from '../../components/Separator';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { getNotificationSettings, saveNotificationSettings, DEFAULT_NOTIFICATION_SETTINGS, NotificationSettings } from '../../utils/notifications';
+import { getNotificationSettings, saveNotificationSettings, DEFAULT_NOTIFICATION_SETTINGS, NotificationSettings } from '../../utils/notificationScheduler';
 
 export default function SettingsScreen() {
   const { isDark, theme, setTheme } = useTheme();
-  const [settings, setSettings] = useState<NotificationSettings>(DEFAULT_NOTIFICATION_SETTINGS);
+  const [settings, setSettings] = useState<NotificationSettings | null>(null);
+  const [loading, setLoading] = useState(true);
   const [showTimePicker, setShowTimePicker] = useState(false);
 
   useEffect(() => {
@@ -16,35 +17,96 @@ export default function SettingsScreen() {
   }, []);
 
   async function loadSettings() {
-    const notificationSettings = await getNotificationSettings();
-    setSettings(notificationSettings);
+    setLoading(true);
+    try {
+      const notificationSettings = await getNotificationSettings();
+      setSettings(notificationSettings);
+      console.log('[SettingsScreen] Loaded settings:', notificationSettings);
+    } catch (error) {
+        console.error("[SettingsScreen] Error loading settings:", error);
+        setSettings(DEFAULT_NOTIFICATION_SETTINGS);
+    } finally {
+        setLoading(false);
+    }
   }
 
   async function handleSettingsChange(newSettings: Partial<NotificationSettings>) {
+    if (!settings) return;
+
     const updatedSettings = { ...settings, ...newSettings };
+    console.log('[SettingsScreen] Updating settings:', updatedSettings);
     setSettings(updatedSettings);
-    await saveNotificationSettings(updatedSettings);
+    try {
+        await saveNotificationSettings(updatedSettings);
+        console.log('[SettingsScreen] Settings saved and daily reminder potentially rescheduled.');
+    } catch (error) {
+        console.error("[SettingsScreen] Error saving settings:", error);
+        Alert.alert("Error", "Failed to save settings.");
+    }
   }
 
   function handleTimeChange(event: any, selectedDate?: Date) {
-    setShowTimePicker(false);
-    if (selectedDate) {
+    if (Platform.OS === 'android') {
+        setShowTimePicker(false);
+    }
+    if (event.type === 'set' && selectedDate && settings) {
       const hours = selectedDate.getHours().toString().padStart(2, '0');
       const minutes = selectedDate.getMinutes().toString().padStart(2, '0');
       const timeString = `${hours}:${minutes}`;
-      handleSettingsChange({ reminderTime: timeString });
+      if (Platform.OS === 'ios') {
+        setShowTimePicker(false);
+      }
+      handleSettingsChange({ dailyReminderTime: timeString });
+    } else if (settings) {
+      setShowTimePicker(false);
     }
   }
 
   function showTimePickerDialog() {
-    setShowTimePicker(true);
+    if (!loading && settings) {
+        setShowTimePicker(true);
+    }
   }
 
-  // Parse the time string (HH:MM) for the time picker
-  const timeComponents = settings.reminderTime.split(':');
-  const timeDate = new Date();
-  timeDate.setHours(parseInt(timeComponents[0], 10));
-  timeDate.setMinutes(parseInt(timeComponents[1], 10));
+  const renderSettingRow = (label: string, value: boolean, onValueChange: (newValue: boolean) => void) => (
+    <View style={styles.option}>
+      <Text style={[styles.optionText, { color: isDark ? '#fff' : '#000' }]}>{label}</Text>
+      <Switch
+        value={value}
+        onValueChange={onValueChange}
+        trackColor={{ false: "#767577", true: "#81b0ff" }}
+        thumbColor={value ? "#0f8fff" : "#f4f3f4"}
+        ios_backgroundColor="#3e3e3e"
+      />
+    </View>
+  );
+  
+  if (loading || !settings) {
+    return (
+      <SafeAreaView 
+        style={[styles.safeArea, styles.loadingContainer, { backgroundColor: isDark ? '#121212' : '#f5f5f5' }]}
+        edges={['top', 'left', 'right']}
+      >
+        <ActivityIndicator size="large" color={isDark ? "#fff" : "#000"} />
+      </SafeAreaView>
+    );
+  }
+  
+  let timePickerDate = new Date(); 
+  try {
+    const [hours, minutes] = settings.dailyReminderTime.split(':').map(Number);
+    if (!isNaN(hours) && !isNaN(minutes)) {
+      timePickerDate.setHours(hours);
+      timePickerDate.setMinutes(minutes);
+    }
+  } catch (e) {
+      console.error("[SettingsScreen] Error parsing dailyReminderTime:", settings.dailyReminderTime, e);
+      const [defaultHours, defaultMinutes] = DEFAULT_NOTIFICATION_SETTINGS.dailyReminderTime.split(':').map(Number);
+      timePickerDate.setHours(defaultHours);
+      timePickerDate.setMinutes(defaultMinutes);
+  }
+  
+  const formattedTime = timePickerDate.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 
   return (
     <SafeAreaView 
@@ -54,13 +116,7 @@ export default function SettingsScreen() {
       <ScrollView style={styles.container}>
         <View style={styles.section}>
           <Text style={[styles.sectionTitle, { color: isDark ? '#fff' : '#000' }]}>Theme</Text>
-          <View style={styles.option}>
-            <Text style={[styles.optionText, { color: isDark ? '#fff' : '#000' }]}>Dark Mode</Text>
-            <Switch
-              value={theme === 'dark'}
-              onValueChange={(value) => setTheme(value ? 'dark' : 'light')}
-            />
-          </View>
+          {renderSettingRow('Dark Mode', isDark, (value) => setTheme(value ? 'dark' : 'light'))}
         </View>
 
         <Separator />
@@ -68,76 +124,52 @@ export default function SettingsScreen() {
         <View style={styles.section}>
           <Text style={[styles.sectionTitle, { color: isDark ? '#fff' : '#000' }]}>Notifications</Text>
           
-          <View style={styles.option}>
-            <Text style={[styles.optionText, { color: isDark ? '#fff' : '#000' }]}>Enable Notifications</Text>
-            <Switch
-              value={settings.enabled}
-              onValueChange={(value) => handleSettingsChange({ enabled: value })}
-            />
-          </View>
+          {renderSettingRow(
+            'Daily Streak Reminder',
+            settings.dailyStreakRemindersEnabled,
+            (value) => handleSettingsChange({ dailyStreakRemindersEnabled: value })
+          )}
+
+          {settings.dailyStreakRemindersEnabled && (
+            <TouchableOpacity 
+              style={styles.option} 
+              onPress={showTimePickerDialog}
+            >
+              <Text style={[styles.optionText, { color: isDark ? '#fff' : '#000' }]}>Reminder Time</Text>
+              <Text style={[styles.timeText, { color: isDark ? '#0f8fff' : '#007AFF' }]}>
+                {formattedTime}
+              </Text>
+            </TouchableOpacity>
+          )}
           
-          {settings.enabled && (
-            <>
-              <View style={styles.option}>
-                <Text style={[styles.optionText, { color: isDark ? '#fff' : '#000' }]}>Play Sounds</Text>
-                <Switch
-                  value={settings.soundEnabled}
-                  onValueChange={(value) => handleSettingsChange({ soundEnabled: value })}
-                />
-              </View>
-              
-              <View style={styles.option}>
-                <Text style={[styles.optionText, { color: isDark ? '#fff' : '#000' }]}>Vibrate</Text>
-                <Switch
-                  value={settings.vibrationEnabled}
-                  onValueChange={(value) => handleSettingsChange({ vibrationEnabled: value })}
-                />
-              </View>
-              
-              <View style={styles.option}>
-                <Text style={[styles.optionText, { color: isDark ? '#fff' : '#000' }]}>Task Reminders</Text>
-                <Switch
-                  value={settings.taskReminders}
-                  onValueChange={(value) => handleSettingsChange({ taskReminders: value })}
-                />
-              </View>
-              
-              <View style={styles.option}>
-                <Text style={[styles.optionText, { color: isDark ? '#fff' : '#000' }]}>Pomodoro Alerts</Text>
-                <Switch
-                  value={settings.pomodoroAlerts}
-                  onValueChange={(value) => handleSettingsChange({ pomodoroAlerts: value })}
-                />
-              </View>
-              
-              <View style={styles.option}>
-                <Text style={[styles.optionText, { color: isDark ? '#fff' : '#000' }]}>Streak Reminders</Text>
-                <Switch
-                  value={settings.streakReminders}
-                  onValueChange={(value) => handleSettingsChange({ streakReminders: value })}
-                />
-              </View>
-              
-              <TouchableOpacity 
-                style={styles.option}
-                onPress={showTimePickerDialog}
-              >
-                <Text style={[styles.optionText, { color: isDark ? '#fff' : '#000' }]}>Daily Reminder Time</Text>
-                <Text style={[styles.timeText, { color: isDark ? '#0f8fff' : '#007AFF' }]}>
-                  {settings.reminderTime}
-                </Text>
-              </TouchableOpacity>
-              
-              {showTimePicker && (
-                <DateTimePicker
-                  value={timeDate}
-                  mode="time"
-                  is24Hour={true}
-                  display="default"
-                  onChange={handleTimeChange}
-                />
-              )}
-            </>
+          {showTimePicker && (
+            <DateTimePicker
+              value={timePickerDate}
+              mode="time"
+              is24Hour={false}
+              display="default"
+              onChange={handleTimeChange}
+            />
+          )}
+
+          <Separator style={{ marginVertical: 8 }}/>
+
+          {renderSettingRow(
+            'Pomodoro Start/End Alerts',
+            settings.pomodoroNotificationsEnabled,
+            (value) => handleSettingsChange({ pomodoroNotificationsEnabled: value })
+          )}
+          
+          {renderSettingRow(
+            'Streak Milestone Alerts',
+            settings.streakMilestoneNotificationsEnabled,
+            (value) => handleSettingsChange({ streakMilestoneNotificationsEnabled: value })
+          )}
+          
+          {renderSettingRow(
+            'Achievement Unlocks',
+            settings.achievementNotificationsEnabled,
+            (value) => handleSettingsChange({ achievementNotificationsEnabled: value })
           )}
         </View>
 
@@ -162,6 +194,11 @@ export default function SettingsScreen() {
 const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   container: {
     flex: 1,

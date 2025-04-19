@@ -12,8 +12,9 @@ import {
 import { useTheme } from '../../context/ThemeContext';
 import { useFocusEffect } from 'expo-router';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import { scheduleTaskReminder, cancelNotification, playSound, vibrate } from '../../utils/notifications';
+import { scheduleTaskReminder } from '../../utils/notifications';
 import uuid from 'uuid';
+import { cancelNotification } from '../../utils/notificationScheduler';
 
 // Helper function to check if a date is in the future (ignoring time)
 function isFutureDate(date: Date): boolean {
